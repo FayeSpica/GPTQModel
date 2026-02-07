@@ -131,7 +131,7 @@ class Glm4MoeLiteQModel(BaseQModel):
             ),
             "post_attention_layernorm": ("post_attention_layernorm:!",),
             "mlp:moe": {
-                # Router - do not quantize
+                # Router - do not quantize (layers 1-46 only)
                 "gate": ("gate:!",),
                 # MoE experts (layers 1-46) - decomposed structure: experts.experts.#.{gate_proj, up_proj, down_proj}
                 # After replacement, mlp.experts becomes Glm4MoeLiteNaiveMoeNew with .experts ModuleList
@@ -142,7 +142,7 @@ class Glm4MoeLiteQModel(BaseQModel):
                 },
                 # Shared experts (layers 1-46)
                 "shared_experts": ("gate_proj:0", "up_proj:0", "down_proj:1"),
-                # Standard MLP for layer 0
+                # Standard MLP for layer 0 (Glm4MoeLiteMLP has gate_proj, up_proj, down_proj directly)
                 "": ("gate_proj:0", "up_proj:0", "down_proj:1"),
             },
         }
