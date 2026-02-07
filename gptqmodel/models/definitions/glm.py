@@ -162,16 +162,22 @@ class Glm4MoeLiteQModel(BaseQModel):
             # For quantization: replace experts module instances to decompose gate_up_proj
             # Layer 0 has standard MLP (Glm4MoeLiteMLP), layers 1-46 have MoE (Glm4MoeLiteMoE)
             config = model.config
+
+            # Determine the target device - use first non-meta parameter's device
+            target_device = None
+            for param in model.parameters():
+                if str(param.device) != 'meta':
+                    target_device = param.device
+                    break
+
             for layer in model.model.layers:
                 mlp = layer.mlp
                 # Check if this is a MoE layer (has experts attribute with gate_up_proj)
                 if hasattr(mlp, 'experts') and hasattr(mlp.experts, 'gate_up_proj'):
-                    # Get the device of the original module
-                    ori_device = mlp.experts.gate_up_proj.device
                     # Replace with decomposed structure
                     new_experts = Glm4MoeLiteNaiveMoeNew(config, ori_experts=mlp.experts)
-                    # Move to same device as original (skip if meta device)
-                    if str(ori_device) != 'meta':
-                        new_experts = new_experts.to(ori_device)
+                    # Move to target device if available
+                    if target_device is not None:
+                        new_experts = new_experts.to(target_device)
                     mlp.experts = new_experts
         return model
