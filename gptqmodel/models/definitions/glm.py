@@ -166,7 +166,12 @@ class Glm4MoeLiteQModel(BaseQModel):
                 mlp = layer.mlp
                 # Check if this is a MoE layer (has experts attribute with gate_up_proj)
                 if hasattr(mlp, 'experts') and hasattr(mlp.experts, 'gate_up_proj'):
+                    # Get the device of the original module
+                    ori_device = mlp.experts.gate_up_proj.device
                     # Replace with decomposed structure
                     new_experts = Glm4MoeLiteNaiveMoeNew(config, ori_experts=mlp.experts)
+                    # Move to same device as original (skip if meta device)
+                    if str(ori_device) != 'meta':
+                        new_experts = new_experts.to(ori_device)
                     mlp.experts = new_experts
         return model
