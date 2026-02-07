@@ -22,13 +22,13 @@ class Glm4MoeLiteExpert(nn.Module):
         return self.down_proj(act_fn(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
 
 
-# New module class to decompose merged gate_up_proj into separate experts
+# ModuleList subclass to decompose merged gate_up_proj into separate experts
 # for GLM-4.7-Flash MoE quantization
 # Original: gate_up_proj (n_experts, intermediate*2, hidden), down_proj (n_experts, hidden, intermediate)
 # New: ModuleList of experts, each with gate_proj, up_proj, down_proj
-class Glm4MoeLiteNaiveMoeNew(nn.Module):
+# Path: mlp.experts.{i}.gate_proj (aligns with glm4_moe pattern)
+class Glm4MoeLiteNaiveMoeNew(nn.ModuleList):
     def __init__(self, config, ori_experts=None):
-        super().__init__()
         self.num_experts = config.n_routed_experts
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.moe_intermediate_size
@@ -42,10 +42,11 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
                 device = ori_experts.gate_up_proj.device
 
         # Create experts as ModuleList, each expert has gate_proj, up_proj, down_proj
-        self.experts = nn.ModuleList([
+        experts = [
             Glm4MoeLiteExpert(self.hidden_size, self.intermediate_size, dtype=dtype, device=device)
             for _ in range(self.num_experts)
-        ])
+        ]
+        super().__init__(experts)
         self.act_fn = nn.SiLU()
 
         if ori_experts is not None and str(ori_experts.gate_up_proj.device) != 'meta':
@@ -58,9 +59,9 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
             down_w = ori_experts.down_proj.data  # (64, 2048, 1536)
 
             for i in range(self.num_experts):
-                self.experts[i].gate_proj.weight.data.copy_(gate_w[i])
-                self.experts[i].up_proj.weight.data.copy_(up_w[i])
-                self.experts[i].down_proj.weight.data.copy_(down_w[i])
+                self[i].gate_proj.weight.data.copy_(gate_w[i])
+                self[i].up_proj.weight.data.copy_(up_w[i])
+                self[i].down_proj.weight.data.copy_(down_w[i])
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         """Custom state_dict loading to decompose merged gate_up_proj into separate experts."""
@@ -75,7 +76,7 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
 
             # Decompose gate_up into gate and up for each expert
             for i in range(self.num_experts):
-                expert_prefix = f"{prefix}experts.{i}."
+                expert_prefix = f"{prefix}{i}."
                 gate_w = gate_up[i, :self.intermediate_size, :]  # (intermediate, hidden)
                 up_w = gate_up[i, self.intermediate_size:, :]  # (intermediate, hidden)
                 down_w = down[i]  # (hidden, intermediate)
@@ -104,7 +105,7 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
             expert_tokens = hidden_states[expert_mask]
 
             # Compute expert output
-            expert_out = self.experts[expert_idx](expert_tokens, self.act_fn)
+            expert_out = self[expert_idx](expert_tokens, self.act_fn)
 
             # Get weights for this expert
             weight_mask = (topk_idx[expert_mask] == expert_idx)
@@ -147,12 +148,9 @@ class Glm4MoeLiteQModel(BaseQModel):
             "mlp:moe": {
                 # Router - do not quantize (layers 1-46 only)
                 "gate": ("gate:!",),
-                # MoE experts (layers 1-46) - decomposed structure: experts.experts.#.{gate_proj, up_proj, down_proj}
-                # After replacement, mlp.experts becomes Glm4MoeLiteNaiveMoeNew with .experts ModuleList
+                # MoE experts (layers 1-46) - decomposed into ModuleList: experts.#.{gate_proj, up_proj, down_proj}
                 "experts": {
-                    "experts": {
-                        "#": ("gate_proj:0", "up_proj:0", "down_proj:1"),
-                    },
+                    "#": ("gate_proj:0", "up_proj:0", "down_proj:1"),
                 },
                 # Shared experts (layers 1-46)
                 "shared_experts": ("gate_proj:0", "up_proj:0", "down_proj:1"),
@@ -163,16 +161,7 @@ class Glm4MoeLiteQModel(BaseQModel):
     ]
 
     def before_model_load(self, load_quantized_model=False):
-        # Always replace the module class before loading
-        # For quantization: the _load_from_state_dict will decompose merged gate_up_proj
-        # For loading quantized: the decomposed structure matches the saved format
-        try:
+        if load_quantized_model:
             import transformers.models.glm4_moe_lite.modeling_glm4_moe_lite as glm4_moe_lite_modeling
-            glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe = Glm4MoeLiteNaiveMoeNew
-        except ImportError:
-            pass
 
-    def after_model_load(self, model, load_quantized_model=False):
-        # Module replacement is now handled in before_model_load by replacing the class
-        # The _load_from_state_dict method in Glm4MoeLiteNaiveMoeNew handles weight decomposition
-        return model
+            glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe = Glm4MoeLiteNaiveMoeNew
