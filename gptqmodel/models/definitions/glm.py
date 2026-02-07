@@ -23,7 +23,7 @@ class GlmQModel(BaseQModel):
     ]
 
 
-# GLM-4 MoE Lite (e.g. GLM-4.7-Flash) uses separate gate_proj/up_proj instead of fused gate_up_proj
+# GLM-4 MoE Lite (e.g. GLM-4.7-Flash) uses LoRA-like decomposed attention projections
 class Glm4MoeLiteQModel(BaseQModel):
     pre_lm_head_norm_module = "model.norm"
 
@@ -33,7 +33,7 @@ class Glm4MoeLiteQModel(BaseQModel):
         "#",
         {
             "input_layernorm": ("input_layernorm:!",),
-            "self_attn": ("q_proj:0", "k_proj:0", "v_proj:0", "o_proj:1"),
+            "self_attn": ("q_a_proj:0", "q_b_proj:0", "kv_a_proj_with_mqa:0", "kv_b_proj:0", "o_proj:1"),
             "post_attention_layernorm": ("post_attention_layernorm:!",),
             "mlp": ("gate_proj:0", "up_proj:0", "down_proj:1"),
         }
