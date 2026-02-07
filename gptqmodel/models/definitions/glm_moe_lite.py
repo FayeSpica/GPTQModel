@@ -37,7 +37,9 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
         device = None
         if ori_experts is not None:
             dtype = ori_experts.gate_up_proj.dtype
-            device = ori_experts.gate_up_proj.device
+            # Don't use meta device
+            if str(ori_experts.gate_up_proj.device) != 'meta':
+                device = ori_experts.gate_up_proj.device
 
         # Create experts as ModuleList, each expert has gate_proj, up_proj, down_proj
         self.experts = nn.ModuleList([
@@ -46,7 +48,7 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
         ])
         self.act_fn = nn.SiLU()
 
-        if ori_experts is not None:
+        if ori_experts is not None and str(ori_experts.gate_up_proj.device) != 'meta':
             # Decompose gate_up_proj: (n_experts, intermediate_size*2, hidden_size)
             # -> gate: (n_experts, intermediate_size, hidden_size)
             # -> up: (n_experts, intermediate_size, hidden_size)
@@ -59,6 +61,31 @@ class Glm4MoeLiteNaiveMoeNew(nn.Module):
                 self.experts[i].gate_proj.weight.data.copy_(gate_w[i])
                 self.experts[i].up_proj.weight.data.copy_(up_w[i])
                 self.experts[i].down_proj.weight.data.copy_(down_w[i])
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        """Custom state_dict loading to decompose merged gate_up_proj into separate experts."""
+        # Check if we're loading from original format (gate_up_proj, down_proj)
+        gate_up_key = prefix + "gate_up_proj"
+        down_key = prefix + "down_proj"
+
+        if gate_up_key in state_dict and down_key in state_dict:
+            # Loading from original merged format - decompose
+            gate_up = state_dict.pop(gate_up_key)  # (n_experts, intermediate*2, hidden)
+            down = state_dict.pop(down_key)  # (n_experts, hidden, intermediate)
+
+            # Decompose gate_up into gate and up for each expert
+            for i in range(self.num_experts):
+                expert_prefix = f"{prefix}experts.{i}."
+                gate_w = gate_up[i, :self.intermediate_size, :]  # (intermediate, hidden)
+                up_w = gate_up[i, self.intermediate_size:, :]  # (intermediate, hidden)
+                down_w = down[i]  # (hidden, intermediate)
+
+                state_dict[expert_prefix + "gate_proj.weight"] = gate_w
+                state_dict[expert_prefix + "up_proj.weight"] = up_w
+                state_dict[expert_prefix + "down_proj.weight"] = down_w
+
+        # Call parent implementation
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
     def forward(self, hidden_states, topk_idx, topk_weight):
         orig_shape = hidden_states.shape
@@ -136,57 +163,16 @@ class Glm4MoeLiteQModel(BaseQModel):
     ]
 
     def before_model_load(self, load_quantized_model=False):
-        if load_quantized_model:
-            # Replace module class for loading quantized model
-            try:
-                import transformers.models.glm4_moe_lite.modeling_glm4_moe_lite as glm4_moe_lite_modeling
-                glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe = Glm4MoeLiteNaiveMoeNew
-            except ImportError:
-                pass
+        # Always replace the module class before loading
+        # For quantization: the _load_from_state_dict will decompose merged gate_up_proj
+        # For loading quantized: the decomposed structure matches the saved format
+        try:
+            import transformers.models.glm4_moe_lite.modeling_glm4_moe_lite as glm4_moe_lite_modeling
+            glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe = Glm4MoeLiteNaiveMoeNew
+        except ImportError:
+            pass
 
     def after_model_load(self, model, load_quantized_model=False):
-        if not load_quantized_model:
-            # For quantization: replace experts module instances to decompose gate_up_proj
-            # Layer 0 has standard MLP (Glm4MoeLiteMLP), layers 1-46 have MoE (Glm4MoeLiteMoE)
-            config = model.config
-
-            # Determine the target device - prefer CUDA, fallback to CPU
-            target_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-            for layer in model.model.layers:
-                mlp = layer.mlp
-                # Check if this is a MoE layer (has experts attribute with gate_up_proj)
-                if hasattr(mlp, 'experts') and hasattr(mlp.experts, 'gate_up_proj'):
-                    ori_experts = mlp.experts
-                    ori_device = ori_experts.gate_up_proj.device
-
-                    # Handle meta device - need to materialize weights first
-                    if str(ori_device) == 'meta':
-                        # Create new experts on target device without copying from ori_experts
-                        dtype = ori_experts.gate_up_proj.dtype
-                        new_experts = Glm4MoeLiteNaiveMoeNew(config, ori_experts=None)
-                        # Move to target device with correct dtype
-                        new_experts = new_experts.to(device=target_device, dtype=dtype)
-
-                        # Force materialize ori_experts weights and copy
-                        # This works because .to() on Parameter triggers accelerate's weight loading
-                        gate_up_data = ori_experts.gate_up_proj.to(target_device)
-                        down_data = ori_experts.down_proj.to(target_device)
-
-                        intermediate_size = config.moe_intermediate_size
-                        gate_w = gate_up_data[:, :intermediate_size, :]
-                        up_w = gate_up_data[:, intermediate_size:, :]
-
-                        for i in range(config.n_routed_experts):
-                            new_experts.experts[i].gate_proj.weight.data.copy_(gate_w[i])
-                            new_experts.experts[i].up_proj.weight.data.copy_(up_w[i])
-                            new_experts.experts[i].down_proj.weight.data.copy_(down_data[i])
-
-                        # Free memory
-                        del gate_up_data, down_data
-                    else:
-                        # Non-meta device - can directly create with ori_experts
-                        new_experts = Glm4MoeLiteNaiveMoeNew(config, ori_experts=ori_experts)
-
-                    mlp.experts = new_experts
+        # Module replacement is now handled in before_model_load by replacing the class
+        # The _load_from_state_dict method in Glm4MoeLiteNaiveMoeNew handles weight decomposition
         return model
