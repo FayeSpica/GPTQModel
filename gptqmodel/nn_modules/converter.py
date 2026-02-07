@@ -118,14 +118,8 @@ def convert_glm4_moe_lite_converter(module, config):
 
     from ..models.definitions.glm_moe_lite import Glm4MoeLiteNaiveMoeNew
 
-    replacements = []
-    for name, sub_module in module.named_modules():
-        if isinstance(sub_module, glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe):
-            replacements.append((name, sub_module))
-
-    for name, sub_module in replacements:
-        new_module = Glm4MoeLiteNaiveMoeNew(config=config, ori_experts=sub_module)
-        setattr(module, name, new_module)
+    if hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and isinstance(module.mlp.experts, glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe):
+        module.mlp.experts = Glm4MoeLiteNaiveMoeNew(config=config, ori_experts=module.mlp.experts)
     return module
 
 MODULE_CONVERTER_MAP = {
