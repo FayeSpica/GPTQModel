@@ -113,8 +113,18 @@ def convert_glm4v_mlp_converter(module, config):
             setattr(module, name, new_module)
     return module
 
+def convert_glm4_moe_lite_converter(module, config):
+    import transformers.models.glm4_moe_lite.modeling_glm4_moe_lite as glm4_moe_lite_modeling
+
+    from ..models.definitions.glm_moe_lite import Glm4MoeLiteNaiveMoeNew
+
+    if hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and isinstance(module.mlp.experts, glm4_moe_lite_modeling.Glm4MoeLiteNaiveMoe):
+        module.mlp.experts = Glm4MoeLiteNaiveMoeNew(config=config, ori_experts=module.mlp.experts)
+    return module
+
 MODULE_CONVERTER_MAP = {
     "llama4": convert_llama4_expert_converter,
     "gpt_oss": convert_gpt_oss_expert_converter,
     "glm4v": convert_glm4v_mlp_converter,
+    "glm4_moe_lite": convert_glm4_moe_lite_converter,
 }
