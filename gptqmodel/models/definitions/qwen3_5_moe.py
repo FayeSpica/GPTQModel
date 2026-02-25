@@ -89,16 +89,15 @@ class Qwen3_5MoeGPTQ(BaseQModel):
     # num_experts is in text_config; base.py get_num_experts handles text_config lookup
     dynamic_expert_index = "num_experts"
 
-    pre_lm_head_norm_module = "model.language_model.norm"
+    pre_lm_head_norm_module = "model.norm"
 
-    # Qwen3.5 MoE is a multimodal model (vision + language MoE).
-    # Weight keys use model.language_model.layers.* structure.
+    # Qwen3.5 MoE: composite config patched so ForConditionalGeneration creates TextModel directly.
+    # Model structure: ForCG.model = TextModel (layers, embed_tokens, norm).
     # Layers alternate between linear_attention (GatedDeltaNet) and full_attention.
     # Experts use fused 3D Parameters (gate_up_proj, down_proj) - not quantizable with standard GPTQ.
     # Only self_attn, linear_attn projections, and shared_expert are quantized here.
     module_tree = [
         "model",
-        "language_model",
         "layers",
         "#",
         {
