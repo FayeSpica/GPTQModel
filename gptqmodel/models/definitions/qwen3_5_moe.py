@@ -9,17 +9,37 @@ log = setup_logger()
 
 
 def _patch_qwen3_5_moe_transformers():
-    """Fix transformers bug: Qwen3_5MoeForConditionalGeneration passes composite config to TextModel.
+    """Fix transformers bug: Qwen3_5MoeConfig composite config lacks text_config attributes at top level.
 
-    In some transformers versions, ForConditionalGeneration.__init__ does:
-        self.model = Qwen3_5MoeTextModel(config)
-    instead of:
-        self.model = Qwen3_5MoeModel(config)
+    The Qwen3_5MoeConfig is a composite config with text_config and vision_config sub-configs.
+    Multiple classes (PreTrainedModel, ForConditionalGeneration, TextModel) access attributes
+    like vocab_size, hidden_size directly from config, but these only exist in text_config.
 
-    This causes AttributeError because the composite config lacks vocab_size at top level.
-    We fix by ensuring ForConditionalGeneration uses the multimodal Model wrapper,
-    and as a fallback, patching TextModel to accept composite configs.
+    We fix this at the root by patching Qwen3_5MoeConfig to promote text_config attributes
+    to the top level, and also patching ForConditionalGeneration to use the correct Model wrapper.
     """
+    # Patch 1: Promote text_config attributes to composite config top level.
+    # This is the most comprehensive fix - any code accessing config.vocab_size will work.
+    try:
+        from transformers import Qwen3_5MoeConfig
+
+        _orig_config_init = Qwen3_5MoeConfig.__init__
+
+        def _patched_config_init(self, *args, **kwargs):
+            _orig_config_init(self, *args, **kwargs)
+            if hasattr(self, 'text_config'):
+                tc = self.text_config
+                tc_dict = tc.to_dict() if hasattr(tc, 'to_dict') else {}
+                for key, value in tc_dict.items():
+                    if not hasattr(self, key):
+                        setattr(self, key, value)
+
+        Qwen3_5MoeConfig.__init__ = _patched_config_init
+        log.info("Patched Qwen3_5MoeConfig to promote text_config attributes.")
+    except ImportError:
+        pass
+
+    # Patch 2: Fix ForConditionalGeneration to use Qwen3_5MoeModel (multimodal wrapper)
     try:
         from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
     except ImportError:
@@ -29,10 +49,9 @@ def _patch_qwen3_5_moe_transformers():
     Model = getattr(mod, 'Qwen3_5MoeModel', None)
     TextModel = getattr(mod, 'Qwen3_5MoeTextModel', None)
 
-    if ForCG is None or TextModel is None:
+    if ForCG is None:
         return
 
-    # Patch 1: Fix ForConditionalGeneration to use Qwen3_5MoeModel (multimodal wrapper)
     if Model is not None:
         _orig_forcg_init = ForCG.__init__
 
@@ -49,15 +68,16 @@ def _patch_qwen3_5_moe_transformers():
         ForCG.__init__ = _patched_forcg_init
         log.info("Patched Qwen3_5MoeForConditionalGeneration to use Qwen3_5MoeModel wrapper.")
 
-    # Patch 2 (fallback): Make TextModel accept composite configs
-    _orig_text_init = TextModel.__init__
+    # Patch 3 (fallback): Make TextModel accept composite configs
+    if TextModel is not None:
+        _orig_text_init = TextModel.__init__
 
-    def _patched_text_init(self, config, *args, **kwargs):
-        if hasattr(config, 'text_config') and not hasattr(config, 'vocab_size'):
-            config = config.text_config
-        _orig_text_init(self, config, *args, **kwargs)
+        def _patched_text_init(self, config, *args, **kwargs):
+            if hasattr(config, 'text_config') and not hasattr(config, 'vocab_size'):
+                config = config.text_config
+            _orig_text_init(self, config, *args, **kwargs)
 
-    TextModel.__init__ = _patched_text_init
+        TextModel.__init__ = _patched_text_init
 
 
 _patch_qwen3_5_moe_transformers()
