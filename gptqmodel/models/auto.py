@@ -139,6 +139,7 @@ from .definitions.qwen2_moe import Qwen2MoeQModel  # noqa: E402
 from .definitions.qwen2_vl import Qwen2VLQModel  # noqa: E402
 from .definitions.qwen3 import Qwen3QModel  # noqa: E402
 from .definitions.qwen3_moe import Qwen3MoeQModel  # noqa: E402
+from .definitions.qwen3_5_moe import Qwen3_5MoeGPTQ  # noqa: E402
 from .definitions.qwen3_next import Qwen3NextGPTQ  # noqa: E402
 from .definitions.qwen3_omni_moe import Qwen3OmniMoeGPTQ
 from .definitions.qwen3_vl import Qwen3_VLQModel
@@ -213,6 +214,7 @@ MODEL_MAP = {
     "minimax_m2": MiniMaxM2GPTQ,
     "qwen2_moe": Qwen2MoeQModel,
     "qwen3_moe": Qwen3MoeQModel,
+    "qwen3_5_moe": Qwen3_5MoeGPTQ,
     "qwen3_next": Qwen3NextGPTQ,
     "qwen2_vl": Qwen2VLQModel,
     "qwen2_vl_text": Qwen2VLQModel,
