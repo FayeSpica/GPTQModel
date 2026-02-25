@@ -50,21 +50,6 @@ class Glm4MoeLiteNaiveMoeNew(nn.ModuleList):
                 self[i].up_proj.weight.data.copy_(gate_up[i, self.intermediate_size:, :])
                 self[i].down_proj.weight.data.copy_(down_w[i])
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        gate_up_key = prefix + "gate_up_proj"
-        down_key = prefix + "down_proj"
-
-        if gate_up_key in state_dict and down_key in state_dict:
-            gate_up = state_dict.pop(gate_up_key)
-            down = state_dict.pop(down_key)
-            for i in range(self.num_experts):
-                expert_prefix = f"{prefix}{i}."
-                state_dict[expert_prefix + "gate_proj.weight"] = gate_up[i, :self.intermediate_size, :]
-                state_dict[expert_prefix + "up_proj.weight"] = gate_up[i, self.intermediate_size:, :]
-                state_dict[expert_prefix + "down_proj.weight"] = down[i]
-
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
-
     def forward(self, hidden_states, topk_idx, topk_weight):
         orig_shape = hidden_states.shape
         hidden_states = hidden_states.view(-1, self.hidden_size)
