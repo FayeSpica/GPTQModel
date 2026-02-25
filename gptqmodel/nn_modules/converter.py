@@ -122,9 +122,21 @@ def convert_glm4_moe_lite_converter(module, config):
         module.mlp.experts = Glm4MoeLiteNaiveMoeNew(config=config, ori_experts=module.mlp.experts)
     return module
 
+def convert_qwen3_5_moe_converter(module, config):
+    from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
+
+    from ..models.definitions.qwen3_5_moe import Qwen3_5MoeExpertsDecomposed
+
+    OrigExperts = getattr(mod, 'Qwen3_5MoeExperts', None)
+    if OrigExperts is not None and hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and isinstance(module.mlp.experts, OrigExperts):
+        expert_config = getattr(config, 'text_config', config)
+        module.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=expert_config, ori_experts=module.mlp.experts)
+    return module
+
 MODULE_CONVERTER_MAP = {
     "llama4": convert_llama4_expert_converter,
     "gpt_oss": convert_gpt_oss_expert_converter,
     "glm4v": convert_glm4v_mlp_converter,
     "glm4_moe_lite": convert_glm4_moe_lite_converter,
+    "qwen3_5_moe": convert_qwen3_5_moe_converter,
 }

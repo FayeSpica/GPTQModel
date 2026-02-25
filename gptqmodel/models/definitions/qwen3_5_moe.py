@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from ..base import BaseQModel
 from ..moe_lifecycle import GateUpDownMoELifecycleHooks
@@ -29,41 +28,40 @@ class Qwen3_5MoeExpertsDecomposed(nn.ModuleList):
     """Decompose fused gate_up_proj (num_experts, 2*inter, hidden) into ModuleList of experts.
 
     Original Qwen3_5MoeExperts stores fused 3D Parameters which can't be quantized with GPTQ.
-    This class creates individual nn.Linear modules per expert and splits the fused weights
-    during state_dict loading.
+    This class creates individual nn.Linear modules per expert and copies the fused weights.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, ori_experts=None):
         self.num_experts = config.num_experts
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.moe_intermediate_size
 
         dtype = None
-        dtype_str = getattr(config, 'dtype', None) or getattr(config, 'torch_dtype', None)
-        if dtype_str and isinstance(dtype_str, str):
-            dtype = getattr(torch, dtype_str, None)
-        elif isinstance(dtype_str, torch.dtype):
-            dtype = dtype_str
+        device = None
+        if ori_experts is not None:
+            dtype = ori_experts.gate_up_proj.dtype
+            if str(ori_experts.gate_up_proj.device) != 'meta':
+                device = ori_experts.gate_up_proj.device
+        else:
+            dtype_str = getattr(config, 'dtype', None) or getattr(config, 'torch_dtype', None)
+            if dtype_str and isinstance(dtype_str, str):
+                dtype = getattr(torch, dtype_str, None)
+            elif isinstance(dtype_str, torch.dtype):
+                dtype = dtype_str
 
         super().__init__([
-            Qwen3_5MoeExpert(self.hidden_size, self.intermediate_size, dtype=dtype)
+            Qwen3_5MoeExpert(self.hidden_size, self.intermediate_size, dtype=dtype, device=device)
             for _ in range(self.num_experts)
         ])
         self.act_fn = nn.SiLU()
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        gate_up_key = prefix + "gate_up_proj"
-        down_key = prefix + "down_proj"
-
-        if gate_up_key in state_dict and down_key in state_dict:
-            gate_up = state_dict.pop(gate_up_key)
-            down = state_dict.pop(down_key)
+        if ori_experts is not None and str(ori_experts.gate_up_proj.device) != 'meta':
+            gate_up = ori_experts.gate_up_proj.data
+            down_w = ori_experts.down_proj.data
             for i in range(self.num_experts):
-                state_dict[f"{prefix}{i}.gate_proj.weight"] = gate_up[i, :self.intermediate_size, :]
-                state_dict[f"{prefix}{i}.up_proj.weight"] = gate_up[i, self.intermediate_size:, :]
-                state_dict[f"{prefix}{i}.down_proj.weight"] = down[i]
-
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+                self[i].gate_proj.weight.data.copy_(gate_up[i, :self.intermediate_size, :])
+                self[i].up_proj.weight.data.copy_(gate_up[i, self.intermediate_size:, :])
+                self[i].down_proj.weight.data.copy_(down_w[i])
 
     def forward(self, hidden_states, top_k_index, top_k_weights):
         final_hidden_states = torch.zeros_like(hidden_states)
@@ -84,8 +82,7 @@ class Qwen3_5MoeExpertsDecomposed(nn.ModuleList):
 def _patch_qwen3_5_moe_transformers():
     """Fix transformers bugs for Qwen3.5 MoE:
     1. Promote text_config attributes to composite config top level
-    2. Replace fused Qwen3_5MoeExperts with decomposed ModuleList for quantization
-    3. Make TextModel accept composite configs (fallback)
+    2. Make TextModel accept composite configs (fallback)
     """
     # Patch 1: Promote text_config attributes to composite config top level.
     try:
@@ -106,17 +103,12 @@ def _patch_qwen3_5_moe_transformers():
     except ImportError:
         pass
 
-    # Patch 2: Replace fused experts with decomposed ModuleList
+    # Patch 2: Make TextModel accept composite configs
     try:
         from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
     except ImportError:
         return
 
-    if hasattr(mod, 'Qwen3_5MoeExperts'):
-        mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
-        log.info("Replaced Qwen3_5MoeExperts with decomposed ModuleList for quantization.")
-
-    # Patch 3 (fallback): Make TextModel accept composite configs
     TextModel = getattr(mod, 'Qwen3_5MoeTextModel', None)
     if TextModel is not None:
         _orig_text_init = TextModel.__init__
@@ -130,6 +122,28 @@ def _patch_qwen3_5_moe_transformers():
 
 
 _patch_qwen3_5_moe_transformers()
+
+
+def _patch_init_weights():
+    """Patch _init_weights to skip decomposed experts (avoids gate_up_proj AttributeError)."""
+    try:
+        from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
+    except ImportError:
+        return
+
+    # Find the PreTrainedModel subclass that defines _init_weights
+    for attr_name in dir(mod):
+        obj = getattr(mod, attr_name, None)
+        if isinstance(obj, type) and '_init_weights' in getattr(obj, '__dict__', {}):
+            _orig_init_weights = obj._init_weights
+
+            def _patched_init_weights(self, module, _orig=_orig_init_weights):
+                if isinstance(module, (Qwen3_5MoeExpertsDecomposed, Qwen3_5MoeExpert)):
+                    return
+                _orig(self, module)
+
+            obj._init_weights = _patched_init_weights
+            break
 
 
 class Qwen3_5MoeGPTQ(BaseQModel):
@@ -147,8 +161,7 @@ class Qwen3_5MoeGPTQ(BaseQModel):
     # MoE lifecycle hooks for gate_proj/up_proj/down_proj pattern
     moe_lifecycle_hooks = GateUpDownMoELifecycleHooks()
 
-    # Qwen3.5 MoE model structure after patches:
-    # ForCG.model = TextModel with decomposed experts (ModuleList of individual experts).
+    # Qwen3.5 MoE model structure after converter decomposes experts:
     # Layers alternate between linear_attention (GatedDeltaNet) and full_attention.
     module_tree = [
         "model",
@@ -170,7 +183,6 @@ class Qwen3_5MoeGPTQ(BaseQModel):
         }
     ]
 
-    # Expert decomposition requires full model in memory for weight splitting
     support_offload_to_disk = False
 
     def before_model_load(self, load_quantized_model=False):
@@ -179,5 +191,6 @@ class Qwen3_5MoeGPTQ(BaseQModel):
             try:
                 from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
                 mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
+                _patch_init_weights()
             except ImportError:
                 pass
