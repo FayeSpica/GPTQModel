@@ -194,3 +194,28 @@ class Qwen3_5MoeGPTQ(BaseQModel):
                 _patch_init_weights()
             except ImportError:
                 pass
+
+    def after_model_load(self, model, load_quantized_model=False):
+        """Decompose fused experts into individual nn.Linear modules for quantization."""
+        if load_quantized_model:
+            return model
+
+        try:
+            from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
+        except ImportError:
+            return model
+
+        OrigExperts = getattr(mod, 'Qwen3_5MoeExperts', None)
+        if OrigExperts is None:
+            return model
+
+        config = getattr(model.config, 'text_config', model.config)
+        converted = 0
+        layers = model.model.layers if hasattr(model, 'model') and hasattr(model.model, 'layers') else []
+        for layer in layers:
+            if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'experts') and isinstance(layer.mlp.experts, OrigExperts):
+                layer.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=config, ori_experts=layer.mlp.experts)
+                converted += 1
+
+        log.info(f"Decomposed fused experts in {converted} layers for quantization.")
+        return model
