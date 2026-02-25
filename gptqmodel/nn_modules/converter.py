@@ -139,4 +139,5 @@ MODULE_CONVERTER_MAP = {
     "glm4v": convert_glm4v_mlp_converter,
     "glm4_moe_lite": convert_glm4_moe_lite_converter,
     "qwen3_5_moe": convert_qwen3_5_moe_converter,
+    "qwen3_5_moe_text": convert_qwen3_5_moe_converter,
 }
