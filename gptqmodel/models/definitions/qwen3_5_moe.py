@@ -86,6 +86,10 @@ _patch_qwen3_5_moe_transformers()
 class Qwen3_5MoeGPTQ(BaseQModel):
     require_monkeypatch = False
 
+    # Layers alternate between linear_attention and full_attention,
+    # so not all modules exist in every layer.
+    layer_modules_strict = False
+
     # num_experts is in text_config; base.py get_num_experts handles text_config lookup
     dynamic_expert_index = "num_experts"
 
