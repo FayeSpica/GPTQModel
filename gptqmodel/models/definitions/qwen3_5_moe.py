@@ -213,3 +213,15 @@ class Qwen3_5MoeGPTQ(BaseQModel):
             torch.cuda.empty_cache()
 
         return module
+
+    def post_quantize(self, module):
+        """Offload quantized layer to disk to free memory on unified-memory systems (e.g. DGX GB10)."""
+        import gc
+
+        if getattr(self.quantize_config, 'offload_to_disk', False):
+            from ...utils.offload import offload_to_disk as _offload_fn
+            _offload_fn(module=module, model=self.model, disk_path=self.quantize_config.offload_to_disk_path)
+            gc.collect()
+            torch.cuda.empty_cache()
+            return module
+        return super().post_quantize(module)
