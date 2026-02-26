@@ -195,36 +195,25 @@ class Qwen3_5MoeGPTQ(BaseQModel):
             except ImportError:
                 pass
 
-    def after_model_load(self, model, load_quantized_model=False):
-        """Decompose fused experts into individual nn.Linear modules for quantization."""
+    def pre_quantize(self, module):
+        """Decompose fused experts per-layer before quantization."""
         import gc
 
-        if load_quantized_model:
-            return model
+        module = super().pre_quantize(module)
 
         try:
             from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
         except ImportError:
-            return model
+            return module
 
         OrigExperts = getattr(mod, 'Qwen3_5MoeExperts', None)
-        if OrigExperts is None:
-            return model
+        if OrigExperts is not None and hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and isinstance(module.mlp.experts, OrigExperts):
+            config = getattr(self.model.config, 'text_config', self.model.config)
+            ori = module.mlp.experts
+            module.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=config, ori_experts=ori)
+            del ori
+            gc.collect()
+            torch.cuda.empty_cache()
+            log.info("Decomposed fused experts for current layer.")
 
-        config = getattr(model.config, 'text_config', model.config)
-        converted = 0
-        layers = model.model.layers if hasattr(model, 'model') and hasattr(model.model, 'layers') else []
-        for layer in layers:
-            if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'experts') and isinstance(layer.mlp.experts, OrigExperts):
-                ori = layer.mlp.experts
-                layer.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=config, ori_experts=ori)
-                del ori
-                converted += 1
-                if converted % 4 == 0:
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
-        gc.collect()
-        torch.cuda.empty_cache()
-        log.info(f"Decomposed fused experts in {converted} layers for quantization.")
-        return model
+        return module
