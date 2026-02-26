@@ -201,19 +201,14 @@ class Qwen3_5MoeGPTQ(BaseQModel):
 
         module = super().pre_quantize(module)
 
-        try:
-            from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
-        except ImportError:
-            return module
-
-        OrigExperts = getattr(mod, 'Qwen3_5MoeExperts', None)
-        if OrigExperts is not None and hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and isinstance(module.mlp.experts, OrigExperts):
+        # Detect fused experts by attribute (gate_up_proj) instead of class name
+        if hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and hasattr(module.mlp.experts, 'gate_up_proj'):
             config = getattr(self.model.config, 'text_config', self.model.config)
             ori = module.mlp.experts
+            log.info(f"Decomposing fused experts: {type(ori).__name__}, gate_up_proj shape={ori.gate_up_proj.shape}")
             module.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=config, ori_experts=ori)
             del ori
             gc.collect()
             torch.cuda.empty_cache()
-            log.info("Decomposed fused experts for current layer.")
 
         return module
