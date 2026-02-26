@@ -197,6 +197,8 @@ class Qwen3_5MoeGPTQ(BaseQModel):
 
     def after_model_load(self, model, load_quantized_model=False):
         """Decompose fused experts into individual nn.Linear modules for quantization."""
+        import gc
+
         if load_quantized_model:
             return model
 
@@ -214,8 +216,15 @@ class Qwen3_5MoeGPTQ(BaseQModel):
         layers = model.model.layers if hasattr(model, 'model') and hasattr(model.model, 'layers') else []
         for layer in layers:
             if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'experts') and isinstance(layer.mlp.experts, OrigExperts):
-                layer.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=config, ori_experts=layer.mlp.experts)
+                ori = layer.mlp.experts
+                layer.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=config, ori_experts=ori)
+                del ori
                 converted += 1
+                if converted % 4 == 0:
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
+        gc.collect()
+        torch.cuda.empty_cache()
         log.info(f"Decomposed fused experts in {converted} layers for quantization.")
         return model
