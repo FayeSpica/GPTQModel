@@ -183,7 +183,8 @@ class Qwen3_5MoeGPTQ(BaseQModel):
         }
     ]
 
-    support_offload_to_disk = False
+    # offload_to_disk works with pre_quantize per-layer decomposition
+    support_offload_to_disk = True
 
     def before_model_load(self, load_quantized_model=False):
         """Replace fused experts for quantized model loading."""
