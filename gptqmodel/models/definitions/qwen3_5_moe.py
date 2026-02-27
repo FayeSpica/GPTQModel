@@ -131,19 +131,31 @@ def _patch_init_weights():
     except ImportError:
         return
 
-    # Find the PreTrainedModel subclass that defines _init_weights
+    # Patch ALL classes that define _init_weights (not just the first one)
+    patched_count = 0
     for attr_name in dir(mod):
         obj = getattr(mod, attr_name, None)
         if isinstance(obj, type) and '_init_weights' in getattr(obj, '__dict__', {}):
             _orig_init_weights = obj._init_weights
 
-            def _patched_init_weights(self, module, _orig=_orig_init_weights):
-                if isinstance(module, (Qwen3_5MoeExpertsDecomposed, Qwen3_5MoeExpert)):
-                    return
-                _orig(self, module)
+            # Create closure that properly captures the original function
+            def _make_patched_init_weights(orig_fn):
+                def _patched_init_weights(self, module):
+                    # Skip decomposed experts to avoid gate_up_proj AttributeError
+                    if isinstance(module, (Qwen3_5MoeExpertsDecomposed, Qwen3_5MoeExpert)):
+                        return
+                    # Also check by class name in case isinstance fails
+                    if type(module).__name__ in ['Qwen3_5MoeExpertsDecomposed', 'Qwen3_5MoeExpert']:
+                        return
+                    # Call original for all other modules
+                    return orig_fn(self, module)
+                return _patched_init_weights
 
-            obj._init_weights = _patched_init_weights
-            break
+            obj._init_weights = _make_patched_init_weights(_orig_init_weights)
+            patched_count += 1
+
+    if patched_count > 0:
+        log.debug(f"Patched _init_weights in {patched_count} Qwen3.5 MoE classes")
 
 
 class Qwen3_5MoeGPTQ(BaseQModel):
