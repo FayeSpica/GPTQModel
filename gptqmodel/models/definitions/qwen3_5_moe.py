@@ -163,9 +163,10 @@ class Qwen3_5MoeGPTQ(BaseQModel):
 
     # Qwen3.5 MoE model structure after converter decomposes experts:
     # Layers alternate between linear_attention (GatedDeltaNet) and full_attention.
+    # Path: model.model.model.layers (ForCausalLM -> .model -> TextModel -> .layers)
     module_tree = [
-        "model",
-        "layers",
+        "model",  # Qwen3_5MoeForCausalLM.model -> Qwen3_5MoeTextModel
+        "layers", # Qwen3_5MoeTextModel.layers -> ModuleList[40]
         "#",
         {
             "input_layernorm": ("input_layernorm:!",),
