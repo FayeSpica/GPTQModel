@@ -226,19 +226,21 @@ class Qwen3_5MoeForConditionalGenerationGPTQ(Qwen3_5MoeGPTQ):
     pass
 
     def before_model_load(self, load_quantized_model=False):
-        """Replace fused experts for both quantization and quantized model loading.
+        """Replace fused experts when loading quantized models.
 
-        IMPORTANT: Expert decomposition is required for BOTH:
-        1. Quantizing an unquantized model (to convert fused 3D tensors)
-        2. Loading an already-quantized model
+        For unquantized models: experts will be decomposed by converter
+        For quantized models: experts are already decomposed in checkpoint
         """
-        # Always decompose experts, not just when loading quantized models
-        try:
-            from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
-            mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
-            log.info("Qwen3.5 MoE: Expert decomposition applied (fused -> individual experts)")
-        except ImportError:
-            pass
+        # Only replace class when loading quantized models
+        # For unquantized models, let transformers load normally with fused experts
+        # then decompose via converter
+        if load_quantized_model:
+            try:
+                from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
+                mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
+                log.info("Qwen3.5 MoE: Expert decomposition applied for loading quantized model")
+            except ImportError:
+                pass
 
     def pre_quantize(self, module):
         """Decompose fused experts per-layer before quantization."""

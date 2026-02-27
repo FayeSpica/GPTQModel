@@ -127,10 +127,15 @@ def convert_qwen3_5_moe_converter(module, config):
 
     from ..models.definitions.qwen3_5_moe import Qwen3_5MoeExpertsDecomposed
 
-    OrigExperts = getattr(mod, 'Qwen3_5MoeExperts', None)
-    if OrigExperts is not None and hasattr(module, 'mlp') and hasattr(module.mlp, 'experts') and isinstance(module.mlp.experts, OrigExperts):
-        expert_config = getattr(config, 'text_config', config)
-        module.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=expert_config, ori_experts=module.mlp.experts)
+    # Check if experts need decomposition
+    # Skip if already decomposed (no gate_up_proj attribute)
+    if hasattr(module, 'mlp') and hasattr(module.mlp, 'experts'):
+        experts = module.mlp.experts
+        # Only decompose if experts have gate_up_proj (fused weights)
+        if hasattr(experts, 'gate_up_proj'):
+            expert_config = getattr(config, 'text_config', config)
+            module.mlp.experts = Qwen3_5MoeExpertsDecomposed(config=expert_config, ori_experts=experts)
+        # else: already decomposed by before_model_load, skip
     return module
 
 MODULE_CONVERTER_MAP = {
