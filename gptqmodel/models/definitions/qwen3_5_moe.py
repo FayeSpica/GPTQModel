@@ -170,7 +170,13 @@ class Qwen3_5MoeGPTQ(BaseQModel):
         {
             "input_layernorm": ("input_layernorm:!",),
             "self_attn:?": ("q_proj:0", "k_proj:0", "v_proj:0", "o_proj:1"),
-            "linear_attn:?": ("in_proj_qkv:0", "out_proj:1"),
+            "linear_attn:?": (
+                "in_proj_qkv:0",
+                "in_proj_z:0",  # Added missing linear_attn modules
+                "in_proj_b:0",  # Added missing linear_attn modules
+                "in_proj_a:0",  # Added missing linear_attn modules
+                "out_proj:1"
+            ),
             "post_attention_layernorm": ("post_attention_layernorm:!",),
             "mlp:moe": {
                 "gate": ("gate:!",),
@@ -187,14 +193,20 @@ class Qwen3_5MoeGPTQ(BaseQModel):
     support_offload_to_disk = True
 
     def before_model_load(self, load_quantized_model=False):
-        """Replace fused experts for quantized model loading."""
-        if load_quantized_model:
-            try:
-                from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
-                mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
-                _patch_init_weights()
-            except ImportError:
-                pass
+        """Replace fused experts for both quantization and quantized model loading.
+
+        IMPORTANT: Expert decomposition is required for BOTH:
+        1. Quantizing an unquantized model (to convert fused 3D tensors)
+        2. Loading an already-quantized model
+        """
+        # Always decompose experts, not just when loading quantized models
+        try:
+            from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
+            mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
+            _patch_init_weights()
+            log.info("Qwen3.5 MoE: Expert decomposition applied (fused -> individual experts)")
+        except ImportError:
+            pass
 
     def pre_quantize(self, module):
         """Decompose fused experts per-layer before quantization."""
