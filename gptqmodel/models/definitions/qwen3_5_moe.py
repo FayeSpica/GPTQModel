@@ -212,42 +212,18 @@ class Qwen3_5MoeForConditionalGenerationGPTQ(Qwen3_5MoeGPTQ):
     """Qwen3.5 MoE multimodal model (ForConditionalGeneration)
 
     This is for Qwen3.5-35B-A3B and similar multimodal models that have:
-    - model.language_model (text layers)
+    - model.layers (text layers - same structure as CausalLM)
     - model.visual (vision encoder)
     - mtp (multimodal text processor - optional)
+
+    Note: Despite being ForConditionalGeneration, this model uses the same
+    structure as CausalLM (model.layers), not model.language_model.layers
     """
 
-    # Override module_tree to point to language_model.layers instead of model.layers
-    # Path: model.language_model.layers (ForConditionalGeneration -> .model.language_model -> .layers)
-    module_tree = [
-        "model",
-        "language_model",  # Add language_model for multimodal models
-        "layers",
-        "#",
-        {
-            "input_layernorm": ("input_layernorm:!",),
-            "self_attn:?": ("q_proj:0", "k_proj:0", "v_proj:0", "o_proj:1"),
-            "linear_attn:?": (
-                "in_proj_qkv:0",
-                "in_proj_z:0",
-                "in_proj_b:0",
-                "in_proj_a:0",
-                "out_proj:1"
-            ),
-            "post_attention_layernorm": ("post_attention_layernorm:!",),
-            "mlp:moe": {
-                "gate": ("gate:!",),
-                "experts": {
-                    "#": ("gate_proj:0", "up_proj:0", "down_proj:1"),
-                },
-                "shared_expert": ("gate_proj:0", "up_proj:0", "down_proj:1"),
-                "shared_expert_gate": ("shared_expert_gate:!",),
-            },
-        }
-    ]
-
-    # Update norm path for multimodal model
-    pre_lm_head_norm_module = "model.language_model.norm"
+    # Use same module_tree as parent class (Qwen3_5MoeGPTQ)
+    # Path: model.layers (same as CausalLM variant)
+    # No need to override module_tree or pre_lm_head_norm_module
+    pass
 
     def before_model_load(self, load_quantized_model=False):
         """Replace fused experts for both quantization and quantized model loading.
