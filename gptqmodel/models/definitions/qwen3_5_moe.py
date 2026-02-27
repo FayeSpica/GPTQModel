@@ -121,9 +121,6 @@ def _patch_qwen3_5_moe_transformers():
         TextModel.__init__ = _patched_text_init
 
 
-_patch_qwen3_5_moe_transformers()
-
-
 def _patch_init_weights():
     """Patch _init_weights to skip decomposed experts (avoids gate_up_proj AttributeError)."""
     try:
@@ -156,6 +153,11 @@ def _patch_init_weights():
 
     if patched_count > 0:
         log.debug(f"Patched _init_weights in {patched_count} Qwen3.5 MoE classes")
+
+
+# Apply patches at module load time (before model instantiation)
+_patch_qwen3_5_moe_transformers()
+_patch_init_weights()
 
 
 class Qwen3_5MoeGPTQ(BaseQModel):
@@ -216,7 +218,6 @@ class Qwen3_5MoeGPTQ(BaseQModel):
         try:
             from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as mod
             mod.Qwen3_5MoeExperts = Qwen3_5MoeExpertsDecomposed
-            _patch_init_weights()
             log.info("Qwen3.5 MoE: Expert decomposition applied (fused -> individual experts)")
         except ImportError:
             pass
