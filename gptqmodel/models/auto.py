@@ -139,7 +139,7 @@ from .definitions.qwen2_moe import Qwen2MoeQModel  # noqa: E402
 from .definitions.qwen2_vl import Qwen2VLQModel  # noqa: E402
 from .definitions.qwen3 import Qwen3QModel  # noqa: E402
 from .definitions.qwen3_moe import Qwen3MoeQModel  # noqa: E402
-from .definitions.qwen3_5_moe import Qwen3_5MoeGPTQ  # noqa: E402
+from .definitions.qwen3_5_moe import Qwen3_5MoeGPTQ, Qwen3_5MoeForConditionalGenerationGPTQ  # noqa: E402
 from .definitions.qwen3_next import Qwen3NextGPTQ  # noqa: E402
 from .definitions.qwen3_omni_moe import Qwen3OmniMoeGPTQ
 from .definitions.qwen3_vl import Qwen3_VLQModel
@@ -293,7 +293,16 @@ def check_and_get_model_definition(model_dir, trust_remote_code=False):
     if model_type not in SUPPORTED_MODELS:
         return BaseQModel
 
-    return MODEL_MAP[model_type]
+    # Special handling for models with multiple architectures under same model_type
+    model_definition = MODEL_MAP[model_type]
+
+    # Qwen3.5 MoE: Check if it's the multimodal ForConditionalGeneration variant
+    if model_type == "qwen3_5_moe":
+        architectures = getattr(config, "architectures", [])
+        if any("ForConditionalGeneration" in arch for arch in architectures):
+            return Qwen3_5MoeForConditionalGenerationGPTQ
+
+    return model_definition
 
 class GPTQModel:
     def __init__(self):
