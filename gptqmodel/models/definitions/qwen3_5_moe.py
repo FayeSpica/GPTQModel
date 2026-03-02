@@ -184,21 +184,24 @@ class Qwen3_5MoeGPTQ(BaseQModel):
         "#",
         {
             "input_layernorm": ("input_layernorm:!",),
-            "self_attn:?": ("q_proj:0", "k_proj:0", "v_proj:0", "o_proj:1"),
+            # Mark attention modules as NOT quantized (keep FP16) - btbtyler09 approach
+            "self_attn:?": ("q_proj:0:!", "k_proj:0:!", "v_proj:0:!", "o_proj:1:!"),
             "linear_attn:?": (
-                "in_proj_qkv:0",
-                "in_proj_z:0",  # Added missing linear_attn modules
-                "in_proj_b:0",  # Added missing linear_attn modules
-                "in_proj_a:0",  # Added missing linear_attn modules
-                "out_proj:1"
+                "in_proj_qkv:0:!",
+                "in_proj_z:0:!",
+                "in_proj_b:0:!",
+                "in_proj_a:0:!",
+                "out_proj:1:!"
             ),
             "post_attention_layernorm": ("post_attention_layernorm:!",),
             "mlp:moe": {
                 "gate": ("gate:!",),
+                # ONLY quantize expert modules (btbtyler09 approach)
                 "experts": {
                     "#": ("gate_proj:0", "up_proj:0", "down_proj:1"),
                 },
-                "shared_expert": ("gate_proj:0", "up_proj:0", "down_proj:1"),
+                # Do NOT quantize shared expert (keep FP16)
+                "shared_expert": ("gate_proj:0:!", "up_proj:0:!", "down_proj:1:!"),
                 "shared_expert_gate": ("shared_expert_gate:!",),
             },
         }
